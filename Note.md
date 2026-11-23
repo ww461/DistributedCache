@@ -95,3 +95,79 @@ func main() {
 }在实际工程中，这种方式有很大弊端： 
 无法自动化：容易遗漏，污染入口，单元测试的好处是：
 写好测试断言（比如 if lru.Len() != 2 { t.Fatalf(...) }），以后无论你怎么重构底层算法，只要在终端敲一句 go test ./...，0.1 秒内就能全自动告诉你所有逻辑是否依然正常！
+
+# Day2
+- lru的map是不支持并发读写的，10个goroutine去读写map，抛出崩溃 fatal error : concurrent map read and map write
+需要加互斥锁
+sync.Mutex
+- 区分lru.Cache 和 cache.cache 
+一个是底层算法实现
+一个是封装+并发
+lru.maxbytes = 底层能用多少
+lru.nbytes = 现在用了多少
+cache.cachebytes = 外层为了懒加载而暂存的上限
+```
+Group (NewGroup 传入 cacheBytes: 100MB)
+  │
+  ▼
+cache 结构体 (cache.go)
+  ├── cacheBytes = 100MB   <── 【暂存配置】：因为 lru 还未创建，先把它记在身上
+  └── lru *lru.Cache       <── 此时还是 nil (懒加载)
+        │
+        │ 当第一次调用 add() 时，执行: lru.New(c.cacheBytes, nil)
+        ▼
+      lru.Cache 结构体 (lru.go)
+        ├── maxBytes = 100MB  <── 【真正的上限】：底层算法根据它决定何时淘汰
+        └── nbytes   = 45KB   <── 【当前使用量】：随着 Add/RemoveOldest 实时增减
+```
+- add 为什么不传Value 而是 BytesView
+lru 包是底层的“通用算法工具”，而 cache 包是具体的“分布式缓存系统”。
+    1.网络传输的数据必须是纯粹的二进制字节流（[]byte）。
+    ByteView 内部存的就是 b []byte，天生具备网络传输和序列化能力；
+    但如果传 lru.Value，它只是一个宽泛的接口（只要求有 Len() int），外部如果塞一个结构体进去，网络层根本不知道该怎么通过网络把它发给另一台服务器。  
+    2. 暴露Value
+
+1. 原始数据 (一堆数字)
+   []byte  -> 比如 [54, 51, 48] (代表 "630")
+     │
+     ▼  (第 1 层包装：装入安全盒子)
+2. ByteView 结构体
+   ByteView{ b: []byte }
+   // 这个盒子很特殊：它天生自带一个方法 func (v ByteView) Len() int
+     │
+     ▼  (第 2 层隐式转换：装入接口大箱子)
+3. 存入 lru.Cache 时，转成了 Value 接口！
+   func (c *Cache) Add(key string, value Value)
+     │
+     ▼  (最终存入双向链表)
+4. entry 结构体
+   type entry struct {
+       key   string
+       value Value // 这个 Value 接口，肚子里装着真实的 ByteView
+   }
+- 将 v->byteView
+
+## 互斥锁的作用
+Go 语言会直接强制崩溃 Go 官方为了性能，默认的 map 是非并发安全的。如果协程 A 正在给 map 写入新数据，协程 B 刚好在读取 map，Go 的底层运行时（Runtime）会直接抛出致命错误：
+双向链表指针错乱 两个协程同时往双向链表头插节点，可能导致 node.prev 和 node.next 指针相互覆盖，最后链表形成死循环环路，CPU 瞬间飙到 100%，或者内存泄漏。
+- 任何人想进去查缓存或者写缓存，先执行 c.mu.Lock()
+
+# geecache.go
+核心门面 Group，协调本地缓存与数据回源。
+缓存未命中时去数据源捞数据，写回缓存
+每个业务方的数据源五花八门（有的查 MySQL，有的查 Redis，有的调用第三方 HTTP API），我们的缓存库怎么做到通用？
+解决办法：让调用方传一个“回源回调函数”。这里会用到 Go 语言中极其经典且优雅的“接口型函数设计模式”
+
+```
+type Getter interface {
+    Get(key string) ([]byte, error)
+}
+type GetterFunc func(key string) ([]byte, error)
+func (f GetterFunc) Get(key string) ([]byte, error) {
+    return f(key)
+}
+```
+- 实现了Get 你就算时Getter
+- 定义一个函数类型GetterFunc 哦哦哦 一个函数类型是接收string 返回[]byte error 这个函数就可以说是Getterfunc
+-  给getterfunc类型定义一个Get方法，直接调用函数本身 这样Getterfunc也是Getter
+- 设计是给NewGroup用的
