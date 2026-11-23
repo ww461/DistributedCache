@@ -167,7 +167,25 @@ func (f GetterFunc) Get(key string) ([]byte, error) {
     return f(key)
 }
 ```
-- 实现了Get 你就算时Getter
-- 定义一个函数类型GetterFunc 哦哦哦 一个函数类型是接收string 返回[]byte error 这个函数就可以说是Getterfunc
+- 实现了Get 你就算是Getter
+- 定义一个函数类型GetterFunc  一个 函数类型是接收string 返回[]byte error 这个函数就可以说是Getterfunc
 -  给getterfunc类型定义一个Get方法，直接调用函数本身 这样Getterfunc也是Getter
 - 设计是给NewGroup用的
+## Group
+- 独立业务的缓存总管
+总的是学生信息 map[key] -> value key = 学号 value ? 成绩、密码。。不能同时放在map里
+需要分组 group  命名空间 namespace
+scores group存成绩
+users group 存资料。。。
+- 加载数据的作用
+load是大的
+getLocally是一部分
+当缓存没命中，把数据从外部找回来，写入缓存
+getLocally是查数据库
+- g本来就实现get接口，为什么还要getter
+g.Get 是“查缓存”的（如果内存里有，直接 0.001 秒返回）。
+g.getter.Get 是“查底层数据库”的（当缓存没有时，用来去真实的数据库/硬盘捞数据）。
+- 做的是一个开源缓存框架
+
+# geecache_test.go
+
