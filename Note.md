@@ -1,164 +1,189 @@
-# DistributedCache
+# DistributedCache 
 
-# Day1
-LRU 缓存核心
-单机内存最基础的那块缓存
-内存大小有限，存满时淘汰一部分旧数据
-数据结构选择：双向链表+ 哈希表
-    哈希表实现O（1）根据key查找数据
-双向链表 go自带的container/list
-    维护访问顺序,每访问一个元素就移到队首；当内存超出阈值，淘汰队尾元素，O（1）
+# Day 1 - LRU 缓存核心
+
+单机内存最基础的那块缓存。  
+内存大小有限，存满时淘汰一部分旧数据。  
+数据结构选择：**双向链表 + 哈希表**
+- **哈希表**：实现 $O(1)$ 根据 key 查找数据
+- **双向链表**（Go 自带的 `container/list`）：维护访问顺序，每访问一个元素就移到队首；当内存超出阈值，淘汰队尾元素，时间复杂度 $O(1)$。
+
+---
 
 ## byteview.go 
-- 封装 缓存值 []byte
-缓存可以存储文本、图片、序列化的二进制对象，用[]byte 存储通用
-b []byte
-Len() int
-- 为什么不直接调用len
-只作用于内置类型
-b是私有成员，包外拿不到，不能让拿到
-为了实现Value接口，解耦
-    lru 是一个通用的缓存淘汰算法包，它在设计时根本不知道、也不想知道你未来存的是什么类型。  
-    你可能存我们的 ByteView，也可能存自定义的 String，甚至未来存一个 Image 结构体。
-    lru 只提了一个要求：“不管你是猫是狗，只要你能告诉我你占多大地方（实现了 Len() int 方法），你就可以存进我的 LRU 缓存！”
-    只要 ByteView 拥有了 Len() int 方法，它就自动满足了 Value 接口（Go 的鸭子类型），从而能被放进 LRU 中
-len和内存的关系
-    []byte 长度就是字节数，字节数就是内存大小
-byte 是一个数据类型，和int一模一样的性质
-`type byte = uint8`
-byte 是8位（1字节）的无符号整数 存储0-255整数，可以应对ASCII
-内存寻址的最小基本单位是字节,所有切片的长度就说内存的大小
-ByteView是自定义的结构体
-ByteSlice() []byte 返回b的深拷贝副本
-为什么不直接暴露字节切片，go的切片底层是引用传递，外部可以修改，缓存会被污染
-，只需一个只读视图提供深拷贝保护
-## lru
-lru.go
-- 实现LRU的Cache结构体以及Get，Add，RemoveOldest
+
+- **封装缓存值 `[]byte`**  
+  缓存可以存储文本、图片、序列化的二进制对象，用 `[]byte` 存储通用。
+  - `b []byte`
+  - `Len() int`
+
+- **为什么不直接调用 len？**  
+  - 只作用于内置类型。
+  - `b` 是私有成员，包外拿不到，不能让拿到。
+  - 为了实现 `Value` 接口，解耦：
+    > `lru` 是一个通用的缓存淘汰算法包，它在设计时根本不知道、也不想知道你未来存的是什么类型。  
+    > 你可能存我们的 `ByteView`，也可能存自定义的 `String`，甚至未来存一个 `Image` 结构体。  
+    > `lru` 只提了一个要求：“不管你是什么，只要你能告诉我你占多大地方（实现了 `Len() int` 方法），你就可以存进我的 LRU 缓存！”  
+    > 只要 `ByteView` 拥有了 `Len() int` 方法，它就自动满足了 `Value` 接口（Go 的鸭子类型），从而能被放进 LRU 中。
+
+- **len 和内存的关系**  
+  - `[]byte` 长度就是字节数，字节数就是内存大小。  
+  - byte 是一个数据类型，和 int 一模一样的性质：`type byte = uint8`  
+  - byte 是 8 位（1 字节）的无符号整数，存储 0-255 整数，可以应对 ASCII。  
+  - 内存寻址的最小基本单位是字节，所以切片的长度就是内存的大小。
+
+- **ByteView 是自定义的结构体**  
+  - `ByteSlice() []byte` 返回 `b` 的深拷贝副本。  
+  - 为什么不直接暴露字节切片？Go 的切片底层是引用传递，外部可以修改，缓存会被污染，只需一个只读视图提供深拷贝保护。
+
+---
+
+## lru.go
+
+- **实现 LRU 的 Cache 结构体以及 Get, Add, RemoveOldest**
+
+```text
 Cache 结构体
 ├── ll: 双向链表 (*list.List)          --> 维护访问顺序（队首最新，队尾最老）
 ├── cache: 哈希表 (map[string]*list.Element) --> 实现 O(1) 快速定位链表节点
 ├── maxBytes: 最大允许占用内存 (int64)
 └── nbytes: 当前已使用的总内存 (int64)
-- ll       *list.List 没有数据类型
-go的标准库的空接口设计，类型断言
 ```
-       list.Element (节点结构体)
-┌─────────────────────────────────┐
-│ prev: 指向前一个节点的指针      │
-│ next: 指向后一个节点的指针      │
-│                                 │
-│ Value (interface{} 字段):       │
-│     │                           │
-│     ▼                           │
-│   &entry{                       │
-│       key:   "Tom",             │
-│       value: String("630"),     │
-│   }                             │
-└─────────────────────────────────┘
 
-}
-```
-interface{} any 可以装进任何类型的数据
-业务层人为规定只存*entry结构体指针
+- **`ll *list.List` 没有数据类型**  
+  Go 的标准库的空接口设计，类型断言：
+  ```text
+         list.Element (节点结构体)
+  ┌─────────────────────────────────┐
+  │ prev: 指向前一个节点的指针      │
+  │ next: 指向后一个节点的指针      │
+  │                                 │
+  │ Value (interface{} 字段):       │
+  │     │                           │
+  │     ▼                           │
+  │   &entry{                       │
+  │       key:   "Tom",             │
+  │       value: String("630"),     │
+  │   }                             │
+  └─────────────────────────────────┘
+  ```
+  `interface{}` / `any` 可以装进任何类型的数据。  
+  业务层人为规定只存 `*entry` 结构体指针。
 
-- kv := ele.Value.(*entry)
-go的双向链表存空接口，任何类型
-list.Element是一个结构体表示节点元素，里面有个字段是Value才是节点值
-本身传进list就是 *entry 转化为any
-.(*entry) 将空接口转化为 *entry类型
-==断言就是知道接口本身是什么类型然后进行转化==
-- nbytes 存的是kv字节数
+- **`kv := ele.Value.(*entry)`**  
+  - Go 的双向链表存空接口，任何类型。  
+  - `list.Element` 是一个结构体表示节点元素，里面有个字段是 `Value` 才是节点值。  
+  - 本身传进 list 就是 `*entry` 转化为 any。  
+  - `.(*entry)` 将空接口转化为 `*entry` 类型。  
+  - ==断言就是知道接口本身是什么类型然后进行转化==
 
-## test
-go test 
-go的单元测试机制
-当你运行 go test ./cache/lru 时，Go 命令行工具在后台悄悄帮你做了这几件事：
-自动搜寻：扫描 ./cache/lru 目录，找出所有以 _test.go 结尾的文件。
-提取测试函数：找出里面所有名字形如 func TestXxx(t *testing.T) 的函数。
-偷偷生成一个临时 main 程序：Go 会在后台自动生成一个包含 main() 的临时程序，里面去逐个调用这些 TestXxx 函数。
-编译并运行：把这个临时程序编译运行，收集每个测试的结果（看有没有触发 t.Fatalf 报错），输出运行耗时和结果，最后自动把临时文件删掉。
-你不需要自己写任何 main() 入口，Go 工具链帮你全自动搞定了。
-文件名必须以 _test.go 结尾
-函数签名必须符合固定格式
-func TestXxx(t *testing.T) {
-    // 函数名必须以大写 "Test" 开头，后面接大写字母（如 TestGet, TestRemoveoldest）
-    // 参数必须是 t *testing.T
-}
-t.Fatalf("...")：打印错误信息并立即终止当前测试。
-t.Errorf("...")：打印错误信息，但继续往下执行其他测试。
+- `nbytes` 存的是 kv 字节数。
 
-func main() {
-    lru := New(...)
-    lru.Add("a", "1")
-    fmt.Println(lru.Get("a")) // 人肉用眼睛看屏幕上打印出来的东西对不对
-}在实际工程中，这种方式有很大弊端： 
-无法自动化：容易遗漏，污染入口，单元测试的好处是：
-写好测试断言（比如 if lru.Len() != 2 { t.Fatalf(...) }），以后无论你怎么重构底层算法，只要在终端敲一句 go test ./...，0.1 秒内就能全自动告诉你所有逻辑是否依然正常！
+---
 
-# Day2
-- lru的map是不支持并发读写的，10个goroutine去读写map，抛出崩溃 fatal error : concurrent map read and map write
-需要加互斥锁
-sync.Mutex
-- 区分lru.Cache 和 cache.cache 
-一个是底层算法实现
-一个是封装+并发
-lru.maxbytes = 底层能用多少
-lru.nbytes = 现在用了多少
-cache.cachebytes = 外层为了懒加载而暂存的上限
-```
-Group (NewGroup 传入 cacheBytes: 100MB)
-  │
-  ▼
-cache 结构体 (cache.go)
-  ├── cacheBytes = 100MB   <── 【暂存配置】：因为 lru 还未创建，先把它记在身上
-  └── lru *lru.Cache       <── 此时还是 nil (懒加载)
-        │
-        │ 当第一次调用 add() 时，执行: lru.New(c.cacheBytes, nil)
-        ▼
-      lru.Cache 结构体 (lru.go)
-        ├── maxBytes = 100MB  <── 【真正的上限】：底层算法根据它决定何时淘汰
-        └── nbytes   = 45KB   <── 【当前使用量】：随着 Add/RemoveOldest 实时增减
-```
-- add 为什么不传Value 而是 BytesView
-lru 包是底层的“通用算法工具”，而 cache 包是具体的“分布式缓存系统”。
-    1.网络传输的数据必须是纯粹的二进制字节流（[]byte）。
-    ByteView 内部存的就是 b []byte，天生具备网络传输和序列化能力；
-    但如果传 lru.Value，它只是一个宽泛的接口（只要求有 Len() int），外部如果塞一个结构体进去，网络层根本不知道该怎么通过网络把它发给另一台服务器。  
-    2. 暴露Value
+## test 单元测试
 
-1. 原始数据 (一堆数字)
-   []byte  -> 比如 [54, 51, 48] (代表 "630")
-     │
-     ▼  (第 1 层包装：装入安全盒子)
-2. ByteView 结构体
-   ByteView{ b: []byte }
-   // 这个盒子很特殊：它天生自带一个方法 func (v ByteView) Len() int
-     │
-     ▼  (第 2 层隐式转换：装入接口大箱子)
-3. 存入 lru.Cache 时，转成了 Value 接口！
-   func (c *Cache) Add(key string, value Value)
-     │
-     ▼  (最终存入双向链表)
-4. entry 结构体
-   type entry struct {
-       key   string
-       value Value // 这个 Value 接口，肚子里装着真实的 ByteView
-   }
-- 将 v->byteView
+- **`go test` 机制**  
+  当你运行 `go test ./cache/lru` 时，Go 命令行工具在后台悄悄帮你做了这几件事：
+  1. **自动搜寻**：扫描 `./cache/lru` 目录，找出所有以 `_test.go` 结尾的文件。
+  2. **提取测试函数**：找出里面所有名字形如 `func TestXxx(t *testing.T)` 的函数。
+  3. **偷偷生成一个临时 main 程序**：Go 会在后台自动生成一个包含 `main()` 的临时程序，里面去逐个调用这些 `TestXxx` 函数。
+  4. **编译并运行**：把这个临时程序编译运行，收集每个测试的结果（看有没有触发 `t.Fatalf` 报错），输出运行耗时和结果，最后自动把临时文件删掉。
+  你不需要自己写任何 `main()` 入口，Go 工具链帮你全自动搞定了。
+
+- **规范要求**：
+  - 文件名必须以 `_test.go` 结尾。
+  - 函数签名必须符合固定格式：
+    ```go
+    func TestXxx(t *testing.T) {
+        // 函数名必须以大写 "Test" 开头，后面接大写字母（如 TestGet, TestRemoveoldest）
+        // 参数必须是 t *testing.T
+    }
+    ```
+  - `t.Fatalf("...")`：打印错误信息并立即终止当前测试。
+  - `t.Errorf("...")`：打印错误信息，但继续往下执行其他测试。
+
+- **对比人肉测试**：
+  ```go
+  func main() {
+      lru := New(...)
+      lru.Add("a", "1")
+      fmt.Println(lru.Get("a")) // 人肉用眼睛看屏幕上打印出来的东西对不对
+  }
+  ```
+  在实际工程中，这种方式有很大弊端：无法自动化，容易遗漏，污染入口。  
+  **单元测试的好处是**：写好测试断言（比如 `if lru.Len() != 2 { t.Fatalf(...) }`），以后无论你怎么重构底层算法，只要在终端敲一句 `go test ./...`，0.1 秒内就能全自动告诉你所有逻辑是否依然正常！
+
+---
+
+# Day 2 - 单机并发与 Group 回调
+
+- **LRU 的 map 是不支持并发读写的**  
+  10 个 goroutine 去读写 map，抛出崩溃：`fatal error: concurrent map read and map write`。  
+  需要加互斥锁：`sync.Mutex`。
+
+- **区分 `lru.Cache` 和 `cache.cache`**  
+  - 一个是底层算法实现
+  - 一个是封装 + 并发
+  - `lru.maxBytes` = 底层能用多少
+  - `lru.nbytes` = 现在用了多少
+  - `cache.cacheBytes` = 外层为了懒加载而暂存的上限
+
+  ```text
+  Group (NewGroup 传入 cacheBytes: 100MB)
+    │
+    ▼
+  cache 结构体 (cache.go)
+    ├── cacheBytes = 100MB   <── 【暂存配置】：因为 lru 还未创建，先把它记在身上
+    └── lru *lru.Cache       <── 此时还是 nil (懒加载)
+          │
+          │ 当第一次调用 add() 时，执行: lru.New(c.cacheBytes, nil)
+          ▼
+        lru.Cache 结构体 (lru.go)
+          ├── maxBytes = 100MB  <── 【真正的上限】：底层算法根据它决定何时淘汰
+          └── nbytes   = 45KB   <── 【当前使用量】：随着 Add/RemoveOldest 实时增减
+  ```
+
+- **`add` 为什么不传 `Value` 而是 `ByteView`？**  
+  `lru` 包是底层的“通用算法工具”，而 `cache` 包是具体的“分布式缓存系统”。
+  1. 网络传输的数据必须是纯粹的二进制字节流（`[]byte`）。`ByteView` 内部存的就是 `b []byte`，天生具备网络传输和序列化能力；但如果传 `lru.Value`，它只是一个宽泛的接口（只要求有 `Len() int`），外部如果塞一个结构体进去，网络层根本不知道该怎么通过网络把它发给另一台服务器。
+  2. 暴露 `Value`。
+
+- **数据包装流程**：
+  ```text
+  1. 原始数据 (一堆数字)
+     []byte  -> 比如 [54, 51, 48] (代表 "630")
+       │
+       ▼  (第 1 层包装：装入安全盒子)
+  2. ByteView 结构体
+     ByteView{ b: []byte }
+     // 这个盒子很特殊：它天生自带一个方法 func (v ByteView) Len() int
+       │
+       ▼  (第 2 层隐式转换：装入接口大箱子)
+  3. 存入 lru.Cache 时，转成了 Value 接口！
+     func (c *Cache) Add(key string, value Value)
+       │
+       ▼  (最终存入双向链表)
+  4. entry 结构体
+     type entry struct {
+         key   string
+         value Value // 这个 Value 接口，肚子里装着真实的 ByteView
+     }
+  ```
+- 将 `v -> ByteView`
 
 ## 互斥锁的作用
-Go 语言会直接强制崩溃 Go 官方为了性能，默认的 map 是非并发安全的。如果协程 A 正在给 map 写入新数据，协程 B 刚好在读取 map，Go 的底层运行时（Runtime）会直接抛出致命错误：
-双向链表指针错乱 两个协程同时往双向链表头插节点，可能导致 node.prev 和 node.next 指针相互覆盖，最后链表形成死循环环路，CPU 瞬间飙到 100%，或者内存泄漏。
-- 任何人想进去查缓存或者写缓存，先执行 c.mu.Lock()
+- **Go 语言会直接强制崩溃**：Go 官方为了性能，默认的 map 是非并发安全的。如果协程 A 正在给 map 写入新数据，协程 B 刚好在读取 map，Go 的底层运行时（Runtime）会直接抛出致命错误。
+- **双向链表指针错乱**：两个协程同时往双向链表头插节点，可能导致 `node.prev` 和 `node.next` 指针相互覆盖，最后链表形成死循环环路，CPU 瞬间飙到 100%，或者内存泄漏。
+- 任何人想进去查缓存或者写缓存，先执行 `c.mu.Lock()`。
 
-# geecache.go
-核心门面 Group，协调本地缓存与数据回源。
-缓存未命中时去数据源捞数据，写回缓存
-每个业务方的数据源五花八门（有的查 MySQL，有的查 Redis，有的调用第三方 HTTP API），我们的缓存库怎么做到通用？
-解决办法：让调用方传一个“回源回调函数”。这里会用到 Go 语言中极其经典且优雅的“接口型函数设计模式”
+## geecache.go
+- 核心门面 Group，协调本地缓存与数据回源。
+- 缓存未命中时去数据源捞数据，写回缓存。
+- 每个业务方的数据源五花八门（有的查 MySQL，有的查 Redis，有的调用第三方 HTTP API），我们的缓存库怎么做到通用？
+- **解决办法**：让调用方传一个“回源回调函数”。这里会用到 Go 语言中极其经典且优雅的“接口型函数设计模式”。
 
-```
+```go
 type Getter interface {
     Get(key string) ([]byte, error)
 }
@@ -167,89 +192,108 @@ func (f GetterFunc) Get(key string) ([]byte, error) {
     return f(key)
 }
 ```
-- 实现了Get 你就算是Getter
-- 定义一个函数类型GetterFunc  一个 函数类型是接收string 返回[]byte error 这个函数就可以说是Getterfunc
--  给getterfunc类型定义一个Get方法，直接调用函数本身 这样Getterfunc也是Getter
-- 设计是给NewGroup用的
+- 实现了 `Get` 你就算是 `Getter`。
+- 定义一个函数类型 `GetterFunc`：一个函数类型是接收 `string` 返回 `[]byte, error`，这个函数就可以说是 `GetterFunc`。
+- 给 `GetterFunc` 类型定义一个 `Get` 方法，直接调用函数本身，这样 `GetterFunc` 也是 `Getter`。
+- 设计是给 `NewGroup` 用的。
+
 ## Group
-- 独立业务的缓存总管
-总的是学生信息 map[key] -> value key = 学号 value ? 成绩、密码。。不能同时放在map里
-需要分组 group  命名空间 namespace
-scores group存成绩
-users group 存资料。。。
-- 加载数据的作用
-load是大的
-getLocally是一部分
-当缓存没命中，把数据从外部找回来，写入缓存
-getLocally是查数据库
-- g本来就实现get接口，为什么还要getter
-g.Get 是“查缓存”的（如果内存里有，直接 0.001 秒返回）。
-g.getter.Get 是“查底层数据库”的（当缓存没有时，用来去真实的数据库/硬盘捞数据）。
-- 做的是一个开源缓存框架
+- **独立业务的缓存总管**  
+  总的是学生信息 `map[key] -> value`，`key = 学号`，`value = ?` 成绩、密码……不能同时放在一个 map 里。  
+  需要分组 group / 命名空间 namespace：
+  - `scores` group 存成绩
+  - `users` group 存资料……
+- **加载数据的作用**：
+  - `load` 是大的
+  - `getLocally` 是一部分
+  - 当缓存没命中，把数据从外部找回来，写入缓存
+  - `getLocally` 是查数据库
+- **g 本来就实现 get 接口，为什么还要 getter？**  
+  - `g.Get` 是“查缓存”的（如果内存里有，直接 0.001 秒返回）。
+  - `g.getter.Get` 是“查底层数据库”的（当缓存没有时，用来去真实的数据库/硬盘捞数据）。
+- 做的是一个开源缓存框架。
 
-# geecache_test.go
+## geecache_test.go
 
-# http 
-之前是同一个程序内部函数调用
-分布式缓存 分布式：启动3-10台独立的服务器
-信息存在机器B的内存
-请求打到A
-机器A向机器B索要 机器间通信用HTTP协议
-HTTP服务端节点是让每一台缓存服务器变成一个web服务器
-B开一个端口监听
-A需要数据，给B发了个GET请求
-B收到并响应返回A
-
-- 缓存服务器：为了速度而生
-```
-[ 用户手机/浏览器 ]
-       │
-       ▼  1. 发起请求："我要查 Tom 的成绩"
-[ Web 业务服务器 (处理业务逻辑) ]
-       │
-       ├─► 2. 先问【缓存服务器】(如 Redis 或我们写的服务)："内存里有 Tom 吗？"
-       │         │
-       │         ├─► [命中！] 0.1毫秒把数据给 Web 服务器返回
-       │         │
-       │         └─► [未命中！]
-       │                 ▼
-       └─────────► 3. Web 服务器再去翻【数据库 (MySQL)】：磁盘慢查询
-                         ▼
-                   4. 顺便把查到的结果丢进【缓存服务器】，下次就能直接秒回
-```
-Redis 自己设计一套底层TCP协议
-为了轻量、免额外安装客户端、使用浏览器crul调试，直接借用HTTP协议
-``` 
-路径设计
-http://localhost:9999/_geecache/<group_name>/<key>
-/_geecache/：系统前缀，用来标识这个请求是发给缓存系统的。
-<group_name>：我们要查哪个命名空间（例如成绩组 scores）。
-<key>：我们要查的具体数据键（例如 Tom）。
-```
-```
-Go 语言的 net/http 包设计得极其精妙。只要任何一个结构体实现了 ServeHTTP(w http.ResponseWriter, r *http.Request) 方法，它就是一个合法的 HTTP 处理器（http.Handler）！
-```
 ---
-# 缓存 vs 内存
-内存是办公桌，缓存是办公桌上的文件，如果没有，要从柜子里拿到桌面
-为什么不直接叫内存
-内存不会处理问题，
-桌子满了怎么办？ 谁该被扔回仓库？（需要像 LRU 淘汰算法 这样的策略）。
-数据过时了怎么办？ 如果仓库里的原件改了，桌面上的旧草稿什么时候撕掉？（需要 TTL 过期策略）。
-多人同时抢怎么办？ 大家同时往桌上放东西会不会打架？（需要 互斥锁 sync.Mutex）。
-内存 + 存找扔删算法 = 缓存
-```
-  ▲   CPU 寄存器 (寄存器)
-  │   CPU 芯片内部缓存 (L1 / L2 / L3 Cache)  <-- 替内存挡灾
-  │   系统主内存 (RAM)                       <-- 替磁盘挡灾
-  ▼   磁盘 / 数据库 (SSD / HDD / MySQL)
-[ 越慢越大越便宜 ]
-```
-==“缓存”（Cache）这个词，在计算机世界里并不是特指某一个具体的硬件零件，而是一种“技术思想”。
-CPU 里面有缓存，内存里也可以建缓存，甚至你的浏览器和手机里也有缓存！== 
-```
-我们写的是一个后端软件系统：
-我们用 Go 语言在操作系统的内存条（RAM）里创建了一个大的 Map；
-把成千上万条经常被查询的数据常驻在内存里；
-这样用户的查询直接在内存里 0.0001 秒完成，不需要每次都傻傻地去查磁盘里的 MySQL 数据库。
-```
+
+# Day 3 - HTTP 服务端节点
+
+- 之前是同一个程序内部函数调用。
+- 分布式缓存，分布式：启动 3-10 台独立的服务器。
+- 信息存在机器 B 的内存，请求打到 A，机器 A 向机器 B 索要，机器间通信用 HTTP 协议。
+- HTTP 服务端节点是让每一台缓存服务器变成一个 web 服务器：
+  - B 开一个端口监听
+  - A 需要数据，给 B 发了个 GET 请求
+  - B 收到并响应返回 A
+- **为啥不直接从数据库拿，而从其他服务器的内存拿？**  
+  每台机器都存一个东西，利用率低；把几台机器的内存拼在一起成一个大的全局内存共享池。
+- **缓存服务器：为了速度而生**
+  ```text
+  [ 用户手机/浏览器 ]
+         │
+         ▼  1. 发起请求："我要查 Tom 的成绩"
+  [ Web 业务服务器 (处理业务逻辑) ]
+         │
+         ├─► 2. 先问【缓存服务器】(如 Redis 或我们写的服务)："内存里有 Tom 吗？"
+         │         │
+         │         ├─► [命中！] 0.1毫秒把数据给 Web 服务器返回
+         │         │
+         │         └─► [未命中！]
+         │                 ▼
+         └─────────► 3. Web 服务器再去翻【数据库 (MySQL)】：磁盘慢查询
+                           ▼
+                     4. 顺便把查到的结果丢进【缓存服务器】，下次就能直接秒回
+  ```
+- Redis 自己设计一套底层 TCP 协议；为了轻量、免额外安装客户端、使用浏览器 curl 调试，直接借用 HTTP 协议。
+
+- **路径设计**：
+  ```text
+  http://localhost:9999/_geecache/<group_name>/<key>
+  ```
+  - `/_geecache/`：系统前缀，用来标识这个请求是发给缓存系统的。
+  - `<group_name>`：我们要查哪个命名空间（例如成绩组 `scores`）。
+  - `<key>`：我们要查的具体数据键（例如 `Tom`）。
+
+- Go 语言的 `net/http` 包设计得极其精妙。只要任何一个结构体实现了 `ServeHTTP(w http.ResponseWriter, r *http.Request)` 方法，它就是一个合法的 HTTP 处理器（`http.Handler`）！
+
+- **URL 路径解析**：
+  ```go
+  strings.SplitN(r.URL.Path[len(p.basePath):], "/", 2)
+  ```
+  从请求的 URL 中把前缀切掉，提取 `groupName` 和 `key`。  
+  `strings` 的限制分割次数函数，按 `"/"` 最多分割成两份，返回一个切片。
+
+## main.go
+- **为什么不需要调用 ServeHTTP？**  
+  只要结构体实现 `ServeHTTP`，就是一个服务员。  
+  `peers` 是一个 `HTTPPool`，已经挂载 `ServeHTTP`。  
+  `log.Fatal(http.ListenAndServe(addr, peers))` 内部在监听、阻塞；请求来后开协程，调用 `ServeHTTP`。
+
+---
+
+# 概念补充：缓存 vs 内存
+
+- 内存是办公桌，缓存是办公桌上的文件。如果没有，要从柜子里拿到桌面。
+- **为什么不直接叫内存？**  
+  内存不会处理问题：
+  - 桌子满了怎么办？谁该被扔回仓库？（需要像 **LRU 淘汰算法** 这样的策略）。
+  - 数据过时了怎么办？如果仓库里的原件改了，桌面上的旧草稿什么时候撕掉？（需要 **TTL 过期策略**）。
+  - 多人同时抢怎么办？大家同时往桌上放东西会不会打架？（需要 **互斥锁 sync.Mutex**）。
+  - **内存 + 存找扔删算法 = 缓存**。
+
+- **存储金字塔**：
+  ```text
+    ▲   CPU 寄存器 (寄存器)
+    │   CPU 芯片内部缓存 (L1 / L2 / L3 Cache)  <-- 替内存挡灾
+    │   系统主内存 (RAM)                       <-- 替磁盘挡灾
+    ▼   磁盘 / 数据库 (SSD / HDD / MySQL)
+  [ 越慢越大越便宜 ]
+  ```
+
+- ==“缓存”（Cache）这个词，在计算机世界里并不是特指某一个具体的硬件零件，而是一种“技术思想”。CPU 里面有缓存，内存里也可以建缓存，甚至你的浏览器和手机里也有缓存！==
+
+- **我们写的是一个后端软件系统**：
+  1. 我们用 Go 语言在操作系统的内存条（RAM）里创建了一个大的 Map；
+  2. 把成千上万条经常被查询的数据常驻在内存里；
+  3. 这样用户的查询直接在内存里 0.0001 秒完成，不需要每次都傻傻地去查磁盘里的 MySQL 数据库。
