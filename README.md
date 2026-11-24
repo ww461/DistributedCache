@@ -1,6 +1,6 @@
 # DistributedCache - 从零实现的轻量级分布式内存缓存
 
-基于 Go 语言从零实现的轻量级分布式缓存系统（参考 Google `groupcache` 架构），支持 LRU 缓存淘汰、一致性哈希节点路由、Singleflight 防缓存击穿及 Protobuf 高性能节点间通信。
+基于 Go 语言从零实现的轻量级分布式缓存系统（参考 Google `groupcache` 架构,教程来源于geektutu），支持 LRU 缓存淘汰、一致性哈希节点路由、Singleflight 防缓存击穿及 Protobuf 高性能节点间通信。
 
 ---
 
